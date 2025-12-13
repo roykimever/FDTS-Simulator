@@ -70,118 +70,142 @@ STRATEGY_DB = {
 }
 STRATEGY_EN_MAP = {'1. 터보 운전법': 'Turbo Driving', '2. 안전 운전법': 'Safety Driving', '3. 풍차 매매법': 'Wind Wheel', '4. 동파법': 'DSS', '5. 떨사오팔': '0458', '6. 종사종팔3': 'Jong Jong'}
 
-# ==============================================================================
-# [1] Streamlit UI 구성 및 입력값 처리
-# ==============================================================================
-st.title("📊 FDTS Trading Strategy Simulator v21.2")
-st.markdown("---")
+# --- 세션 상태 초기화 및 자동 연동 로직 ---
+if 's_name' not in st.session_state:
+    st.session_state.s_name = list(STRATEGY_DB.keys())[0]
+if 'run_sim' not in st.session_state:
+    st.session_state.run_sim = False
 
-# ----------------------------------------------------
-# 🌟 1. 기본 설정 및 기간
-# ----------------------------------------------------
-st.subheader("🎛️ 기본 설정")
+# 🌟 [핵심 수정] 전략 변경 시 다른 입력값의 기본값을 변경하는 함수
+def update_defaults_on_strategy_change():
+    new_strategy_name = st.session_state.s_name
+    config = STRATEGY_DB[new_strategy_name]
+    
+    # 1. 기본 설정값 업데이트
+    st.session_state.split = config['split']
+    st.session_state.p_rate = config['profit']
+    st.session_state.l_rate = config['loss']
+    st.session_state.cycle = config['cycle']
+    
+    # 2. 파라미터 매트릭스 업데이트
+    modes = ['Turbo', 'Sports', 'Comfort', 'Eco']
+    param_keys = ['Buy', 'Sell', 'SL_H', 'SL_M', 'SL_L']
+    
+    for mode in modes:
+        # Rules (Buy, Sell)
+        st.session_state[f"param_side_{mode}_Buy"] = config['rules'][mode].get('Buy', 0.0)
+        st.session_state[f"param_side_{mode}_Sell"] = config['rules'][mode].get('Sell', 0.0)
+        
+        # SL Matrix (SL_H, SL_M, SL_L)
+        sl_list = config['sl_matrix'][mode]
+        st.session_state[f"param_side_{mode}_SL_H"] = sl_list[0]
+        st.session_state[f"param_side_{mode}_SL_M"] = sl_list[1]
+        st.session_state[f"param_side_{mode}_SL_L"] = sl_list[2]
+        
+    # 3. 비중 업데이트
+    for i in range(1, 11):
+        st.session_state[f"weight_side_{i}"] = config['weights'].get(i, 0.0)
 
-# 1-1. 기본 설정
-col_s_name, col_ticker, col_method = st.columns(3)
-with col_s_name:
-    s_name = st.selectbox("📌 매매전략", list(STRATEGY_DB.keys()), key='s_name')
-with col_ticker:
-    ticker = st.text_input("📈 종목코드", value="SOXL").strip().upper()
-with col_method:
+# ==============================================================================
+# [1] Streamlit UI 구성 및 입력값 처리 (사이드바 적용)
+# ==============================================================================
+# --- 사이드바 시작 ---
+with st.sidebar:
+    st.header("🎛️ 입력 대시보드")
+    
+    # 1. 기본 설정 (on_change 이벤트 추가하여 연동)
+    s_name = st.selectbox("📌 매매전략", 
+                          list(STRATEGY_DB.keys()), 
+                          key='s_name', 
+                          on_change=update_defaults_on_strategy_change) # 🌟 변경 시 기본값 업데이트
+    ticker = st.text_input("📈 종목코드", value="SOXL", key='ticker')
     method = st.selectbox("⚖️ 매수방식", ['정액매수 (분모=종가)', '정수매수 (분모=목표가)'], key='method')
 
-config = STRATEGY_DB[s_name]
+    config = STRATEGY_DB[s_name]
 
-# 1-2. 자금 및 복리
-col_seed, col_split, col_cycle = st.columns(3)
-with col_seed:
-    seed = st.number_input("💰 초기자본($)", value=40000, step=1000, key='seed')
-with col_split:
-    split = st.number_input("🔢 분할수", value=config['split'], min_value=1, step=1, key='split')
-with col_cycle:
-    cycle = st.number_input("🔄 갱신주기(일)", value=config['cycle'], min_value=1, step=1, key='cycle')
-
-col_profit, col_loss, col_start, col_end = st.columns(4)
-with col_profit:
-    p_rate = st.number_input("🔺 이익복리(%)", value=config['profit'], step=0.1, key='p_rate')
-with col_loss:
-    l_rate = st.number_input("🔻 손실복리(%)", value=config['loss'], step=0.1, key='l_rate')
-with col_start:
-    start_d = st.date_input("📅 시작일", value=date(2025, 1, 1), key='start_d')
-with col_end:
-    end_d = st.date_input("🏁 종료일", value=datetime.now().date(), key='end_d')
-
-# ----------------------------------------------------
-# 🌟 2. 전략 파라미터 튜닝 및 비중 설정
-# ----------------------------------------------------
-st.markdown("---")
-st.subheader("⚙️ 세부 파라미터 튜닝")
-
-modes = ['Turbo', 'Sports', 'Comfort', 'Eco']
-params_labels = ['매수율(%)', '익절율(%)', 'SL(상단)', 'SL(중단)', 'SL(하단)']
-param_keys = ['Buy', 'Sell', 'SL_H', 'SL_M', 'SL_L']
-
-custom_rules = {}
-custom_sl_matrix = {}
-custom_weights = {}
-
-# --- 파라미터 매트릭스 입력 UI ---
-with st.container(border=True):
-    st.markdown("##### 모드별 매수/익절율 및 손절일 설정 (단위: % / 일)")
+    # 2. 자금 및 복리
+    st.subheader("💰 자금 및 비율")
+    seed = st.number_input("초기자본($)", value=40000, step=1000, key='seed')
+    col_split, col_cycle = st.columns(2)
+    with col_split:
+        # 🌟 Split 값은 세션 상태에 저장된 값을 기본값으로 사용
+        split = st.number_input("분할수", value=st.session_state.split, min_value=1, step=1, key='split')
+    with col_cycle:
+        cycle = st.number_input("갱신주기(일)", value=st.session_state.cycle, min_value=1, step=1, key='cycle')
     
-    # 튜닝 입력값 로드 및 UI 생성
-    for r_idx, label in enumerate(params_labels):
-        p_key = param_keys[r_idx]
-        cols = st.columns(len(modes) + 1)
-        cols[0].markdown(f"**{label}**")
+    col_profit, col_loss = st.columns(2)
+    with col_profit:
+        p_rate = st.number_input("이익복리(%)", value=st.session_state.p_rate, step=0.1, key='p_rate')
+    with col_loss:
+        l_rate = st.number_input("손실복리(%)", value=st.session_state.l_rate, step=0.1, key='l_rate')
+
+    # 3. 기간 설정
+    st.subheader("📅 기간 설정")
+    start_d = st.date_input("시작일", value=date(2025, 1, 1), key='start_d')
+    end_d = st.date_input("종료일", value=datetime.now().date(), key='end_d')
+
+    # 4. 파라미터 튜닝 (Expander로 정리)
+    modes = ['Turbo', 'Sports', 'Comfort', 'Eco']
+    params_labels = ['매수율(%)', '익절율(%)', 'SL(상단)', 'SL(중단)', 'SL(하단)']
+    param_keys = ['Buy', 'Sell', 'SL_H', 'SL_M', 'SL_L']
+    
+    custom_rules = {m: {} for m in modes}
+    custom_sl_matrix = {m: [0, 0, 0] for m in modes}
+    custom_weights = {}
+
+    with st.expander("⚙️ 고급 파라미터 및 비중 튜닝", expanded=True):
+        st.markdown("##### 모드별 파라미터")
         
-        for c_idx, mode in enumerate(modes):
-            # DB에서 기본값 로드
-            if p_key in ['Buy', 'Sell']:
-                default_val = config['rules'][mode].get(p_key, 0.0)
-                step = 0.1
-                is_int = False
-            else:
-                sl_idx = r_idx - 2
-                default_val = config['sl_matrix'][mode][sl_idx]
-                step = 1
-                is_int = True
-
-            key_id = f"param_{s_name}_{mode}_{p_key}"
+        # 파라미터 매트릭스 입력
+        for r_idx, label in enumerate(params_labels):
+            p_key = param_keys[r_idx]
+            st.markdown(f"**{label}**")
+            cols_input = st.columns(len(modes))
             
-            # UI 생성
-            if is_int:
-                value = cols[c_idx + 1].number_input(' ', value=int(default_val), key=key_id, min_value=0, step=step, label_visibility="collapsed")
-                if 'SL' in p_key:
-                    custom_sl_matrix.setdefault(mode, [0, 0, 0])[sl_idx] = int(value)
+            for c_idx, mode in enumerate(modes):
+                if p_key in ['Buy', 'Sell']:
+                    step = 0.1
+                    is_int = False
+                    # 🌟 세션 상태에서 현재 값 로드
+                    default_val = st.session_state[f"param_side_{mode}_{p_key}"]
+                else:
+                    step = 1
+                    is_int = True
+                    # 🌟 세션 상태에서 현재 값 로드
+                    default_val = st.session_state[f"param_side_{mode}_{p_key}"]
+                
+                key_id = f"param_side_{mode}_{p_key}"
+                
+                # UI 생성
+                if is_int:
+                    value = cols_input[c_idx].number_input(f"{mode}", value=int(default_val), key=key_id, min_value=0, step=step, label_visibility="visible")
+                    if 'SL' in p_key:
+                        custom_sl_matrix.setdefault(mode, [0, 0, 0])[r_idx - 2] = int(value)
+                else:
+                    value = cols_input[c_idx].number_input(f"{mode}", value=float(default_val), key=key_id, step=step, label_visibility="visible", format="%.1f")
+                    custom_rules.setdefault(mode, {})[p_key] = value * 0.01
+
+        st.markdown("##### ⚖️ 분할별 비중")
+        cols_weights = st.columns(2)
+        for i in range(1, split + 1):
+            if i <= 10:
+                # 🌟 세션 상태에서 현재 값 로드
+                w = cols_weights[(i - 1) % 2].number_input(f"{i}차 비중", value=st.session_state[f"weight_side_{i}"], key=f"weight_side_{i}", step=0.1, label_visibility="visible")
+                custom_weights[i] = w
             else:
-                value = cols[c_idx + 1].number_input(' ', value=float(default_val), key=key_id, step=step, label_visibility="collapsed", format="%.1f")
-                custom_rules.setdefault(mode, {})[p_key] = value * 0.01 # %를 소수로 변환
-
-
-# --- 분할별 비중 설정 UI ---
-st.markdown("##### ⚖️ 분할별 비중 (1회 투입금 배수)")
-cols_weights = st.columns(min(10, split))
-
-# 튜닝 입력값 저장소
-for i in range(1, split + 1):
-    default_weight = config['weights'].get(i, 0.0)
+                custom_weights[i] = config['weights'].get(i, 0.0)
     
-    if i <= 10: # UI는 최대 10차까지 표시
-        w = cols_weights[i - 1].number_input(f"{i}차 비중", value=float(default_weight), key=f"weight_{i}", step=0.1, label_visibility="visible")
-        custom_weights[i] = w
-    else:
-        # 11차 이상은 DB 기본값 사용 (로직에만 전달)
-        custom_weights[i] = default_weight
+    # --- Run Button (사이드바 하단) ---
+    st.markdown("---")
+    if st.button("✨ 시뮬레이션 시작 (RUN)", type="primary", use_container_width=True):
+        st.session_state['run_sim'] = True
+    
+# --- 초기 로딩 시 기본값 설정 ---
+if not st.session_state.run_sim:
+    # 🌟 첫 로딩 시에만 기본값 세팅
+    if 'split' not in st.session_state:
+         update_defaults_on_strategy_change()
 
-
-# --- Run Button ---
-st.markdown("---")
-if st.button("✨ 시뮬레이션 시작 (RUN)", type="primary", use_container_width=True):
-    st.session_state['run_sim'] = True
-else:
-    if 'run_sim' not in st.session_state:
-        st.session_state['run_sim'] = False
 
 # ==============================================================================
 # [2] 시뮬레이션 엔진 (핵심 로직)
@@ -196,20 +220,20 @@ def get_data(ticker_input, start_date, end_date):
     return qqq, target
 
 def run_simulation_logic():
-    st.markdown("---")
-    st.subheader(f"📊 {STRATEGY_EN_MAP.get(s_name, s_name)} 분석 결과")
+    st_name_en = STRATEGY_EN_MAP.get(st.session_state.s_name, st.session_state.s_name)
     
-    # 🌟 UI 입력값 로드
-    seed_input = float(seed)
-    split_input = int(split)
-    update_cycle = int(cycle)
-    profit_rate = float(p_rate) * 0.01
-    loss_rate = float(l_rate) * 0.01
-    
-    with st.spinner(f"🔄 [{s_name}] 데이터를 분석하고 있습니다..."):
+    # 🌟 UI 입력값 로드 (Session State에서 값 참조)
+    seed_input = float(st.session_state.seed)
+    split_input = int(st.session_state.split)
+    update_cycle = int(st.session_state.cycle)
+    profit_rate = float(st.session_state.p_rate) * 0.01
+    loss_rate = float(st.session_state.l_rate) * 0.01
+    method_input = st.session_state.method 
+
+    with st.spinner(f"🔄 [{st.session_state.s_name}] 데이터를 분석하고 있습니다..."):
         try:
             # 1. 데이터 로드
-            qqq, target = get_data(ticker, start_d, end_d)
+            qqq, target = get_data(st.session_state.ticker, st.session_state.start_d, st.session_state.end_d)
             if qqq.empty or target.empty:
                 st.error("데이터 로드 실패 또는 종목 코드가 잘못되었습니다.")
                 return
@@ -243,14 +267,14 @@ def run_simulation_logic():
             target['wRSI'] = q_weekly['wRSI'].reindex(target.index, method='bfill')
             target['Mode_Std'] = q_weekly['Mode_Std'].reindex(target.index, method='bfill').fillna("Comfort")
             target['Mode_Dongpa'] = q_weekly['Mode_Dongpa'].reindex(target.index, method='bfill').fillna("Eco")
-            target['Mode'] = target['Mode_Dongpa'] if STRATEGY_DB[s_name]['mode_logic'] == 'Dongpa' else target['Mode_Std']
+            target['Mode'] = target['Mode_Dongpa'] if STRATEGY_DB[st.session_state.s_name]['mode_logic'] == 'Dongpa' else target['Mode_Std']
             
             # --- 파라미터 적용 (커스텀 룰 반영) ---
             def get_params(row):
                 m = row['Mode']; dr = row['dRSI']
-                if not STRATEGY_DB[s_name]['use_mode']: m = "Comfort"
+                if not STRATEGY_DB[st.session_state.s_name]['use_mode']: m = "Comfort"
                 
-                # UI에서 설정된 값 사용
+                # 🌟 UI에서 설정된 값 사용
                 rs_local = custom_rules.get(m, {'Buy': 0.0, 'Sell': 0.0})
                 sl_list = custom_sl_matrix.get(m, [15, 17, 20])
                 
@@ -259,14 +283,13 @@ def run_simulation_logic():
                     if dr >= 58: sl = sl_list[0]
                     elif dr <= 40: sl = sl_list[2]
                 
-                # Buy, Sell은 %를 소수로 바꿨으므로 그대로 사용
                 return pd.Series([rs_local.get("Buy", 0.0), rs_local.get("Sell", 0.0), sl])
 
             target[['Buy_Rate', 'Sell_Rate', 'SL_Days']] = target.apply(get_params, axis=1)
             target['Prev_Close'] = target['Close'].shift(1)
             target['Target_Price'] = target['Prev_Close'] * (1 + target['Buy_Rate'])
 
-            df = target.loc[start_d:end_d].copy()
+            df = target.loc[st.session_state.start_d:st.session_state.end_d].copy()
             if df.empty:
                 st.error("해당 기간의 데이터가 없습니다.")
                 return
@@ -403,7 +426,7 @@ def run_simulation_logic():
             
             ax1.set_ylabel('Asset ($)', fontsize=11, fontweight='bold', color='#e74c3c')
             ax1_twin.set_ylabel('Stock Price ($)', fontsize=11, color='#95a5a6')
-            ax1.set_title(f"🚀 Asset Growth & Price Action ({ticker}) - {STRATEGY_EN_MAP.get(s_name, s_name)}", fontsize=14, fontweight='bold', pad=10)
+            ax1.set_title(f"🚀 Asset Growth & Price Action ({st.session_state.ticker}) - {STRATEGY_EN_MAP.get(st.session_state.s_name, st.session_state.s_name)}", fontsize=14, fontweight='bold', pad=10)
             
             lines = line1 + line2; labels = [l.get_label() for l in lines]
             ax1.legend(lines, labels, loc='upper left', frameon=True, framealpha=0.9, shadow=True)
