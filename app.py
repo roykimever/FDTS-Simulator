@@ -70,26 +70,33 @@ STRATEGY_DB = {
 }
 STRATEGY_EN_MAP = {'1. 터보 운전법': 'Turbo Driving', '2. 안전 운전법': 'Safety Driving', '3. 풍차 매매법': 'Wind Wheel', '4. 동파법': 'DSS', '5. 떨사오팔': '0458', '6. 종사종팔3': 'Jong Jong'}
 
+# --- 세션 상태 초기화 함수 ---
+if 's_name_key' not in st.session_state:
+    st.session_state.s_name_key = list(STRATEGY_DB.keys())[0]
+
 # ==============================================================================
 # [1] Streamlit UI 구성 및 입력값 처리
 # ==============================================================================
-st.title("📊 FDTS Trading Strategy Simulator v21.1")
+st.title("📊 FDTS Trading Strategy Simulator v21.2")
 st.markdown("---")
 
 # ----------------------------------------------------
 # 🌟 1. 기본 설정 및 기간
 # ----------------------------------------------------
 st.subheader("🎛️ 기본 설정")
+
+# 1-1. 기본 설정
 col_s_name, col_ticker, col_method = st.columns(3)
 with col_s_name:
-    s_name = st.selectbox("📌 매매전략", list(STRATEGY_DB.keys()))
+    s_name = st.selectbox("📌 매매전략", list(STRATEGY_DB.keys()), key='s_name')
 with col_ticker:
     ticker = st.text_input("📈 종목코드", value="SOXL").strip().upper()
 with col_method:
-    method = st.selectbox("⚖️ 매수방식", ['정액매수 (분모=종가)', '정수매수 (분모=목표가)'])
+    method = st.selectbox("⚖️ 매수방식", ['정액매수 (분모=종가)', '정수매수 (분모=목표가)'], key='method')
 
 config = STRATEGY_DB[s_name]
 
+# 1-2. 자금 및 복리
 col_seed, col_split, col_cycle = st.columns(3)
 with col_seed:
     seed = st.number_input("💰 초기자본($)", value=40000, step=1000, key='seed')
@@ -118,14 +125,14 @@ modes = ['Turbo', 'Sports', 'Comfort', 'Eco']
 params_labels = ['매수율(%)', '익절율(%)', 'SL(상단)', 'SL(중단)', 'SL(하단)']
 param_keys = ['Buy', 'Sell', 'SL_H', 'SL_M', 'SL_L']
 
-custom_rules = {}
-custom_sl_matrix = {}
-custom_weights = {}
-
 # --- 파라미터 매트릭스 입력 UI ---
 with st.container(border=True):
     st.markdown("##### 모드별 매수/익절율 및 손절일 설정 (단위: % / 일)")
     
+    # 튜닝 입력값 저장소 초기화
+    custom_rules = {m: {} for m in modes}
+    custom_sl_matrix = {m: [0, 0, 0] for m in modes}
+
     # 헤더 생성
     cols_header = st.columns(len(modes) + 1)
     cols_header[0].markdown('**파라미터**')
@@ -139,8 +146,7 @@ with st.container(border=True):
         cols[0].markdown(f"**{label}**")
         
         for c_idx, mode in enumerate(modes):
-            
-            # DB에서 기본값 로드 (Buy, Sell은 rules, 나머지는 sl_matrix)
+            # DB에서 기본값 로드
             if p_key in ['Buy', 'Sell']:
                 default_val = config['rules'][mode].get(p_key, 0.0)
                 step = 0.1
@@ -153,29 +159,31 @@ with st.container(border=True):
 
             key_id = f"{s_name}_{mode}_{p_key}"
             
+            # UI 생성
             if is_int:
                 value = cols[c_idx + 1].number_input(' ', value=int(default_val), key=key_id, min_value=0, step=step, label_visibility="collapsed")
                 if 'SL' in p_key:
-                    custom_sl_matrix.setdefault(mode, [0, 0, 0])[sl_idx] = int(value)
+                    custom_sl_matrix[mode][sl_idx] = int(value)
             else:
                 value = cols[c_idx + 1].number_input(' ', value=float(default_val), key=key_id, step=step, label_visibility="collapsed", format="%.1f")
-                custom_rules.setdefault(mode, {})[p_key] = value * 0.01 # %를 소수로 변환
+                custom_rules[mode][p_key] = value * 0.01 # %를 소수로 변환
+
 
 # --- 분할별 비중 설정 UI ---
 st.markdown("##### ⚖️ 분할별 비중 (1회 투입금 배수)")
-cols_weights_title = st.columns(min(10, split)) # 최대 10차까지 표시
 cols_weights = st.columns(min(10, split))
 
+# 튜닝 입력값 저장소
+custom_weights = {}
+
 for i in range(1, split + 1):
-    if i <= 10: # UI는 최대 10차까지 간결하게 표시
-        default_weight = config['weights'].get(i, 0.0)
-        
-        # UI 입력 (Key는 고유하게 설정)
+    default_weight = config['weights'].get(i, 0.0)
+    
+    if i <= 10: # UI는 최대 10차까지 표시
         w = cols_weights[i - 1].number_input(f"{i}차 비중", value=float(default_weight), key=f"weight_{i}", step=0.1, label_visibility="visible")
         custom_weights[i] = w
     else:
         # 11차 이상은 UI에 표시하지 않고 DB 기본값 (1.0)으로 로직에만 전달
-        default_weight = config['weights'].get(i, 0.0)
         custom_weights[i] = default_weight
 
 
@@ -201,12 +209,16 @@ def get_data(ticker_input, start_date, end_date):
 
 def run_simulation_logic():
     st.markdown("---")
-    st.subheader(f"📊 {s_name_en} 분석 결과")
+    st.subheader(f"📊 {STRATEGY_EN_MAP.get(s_name, s_name)} 분석 결과")
     
+    # 🌟 UI 입력값 다시 로드 (파라미터 변수)
     st_name_en = STRATEGY_EN_MAP.get(s_name, s_name)
+    seed_input = float(seed)
+    split_input = int(split)
+    update_cycle = int(cycle)
     profit_rate = float(p_rate) * 0.01
     loss_rate = float(l_rate) * 0.01
-
+    
     with st.spinner(f"🔄 [{s_name}] 데이터를 분석하고 있습니다..."):
         try:
             # 1. 데이터 로드
@@ -244,12 +256,12 @@ def run_simulation_logic():
             target['wRSI'] = q_weekly['wRSI'].reindex(target.index, method='bfill')
             target['Mode_Std'] = q_weekly['Mode_Std'].reindex(target.index, method='bfill').fillna("Comfort")
             target['Mode_Dongpa'] = q_weekly['Mode_Dongpa'].reindex(target.index, method='bfill').fillna("Eco")
-            target['Mode'] = target['Mode_Dongpa'] if config['mode_logic'] == 'Dongpa' else target['Mode_Std']
+            target['Mode'] = target['Mode_Dongpa'] if STRATEGY_DB[s_name]['mode_logic'] == 'Dongpa' else target['Mode_Std']
             
             # --- 파라미터 적용 (커스텀 룰 반영) ---
             def get_params(row):
                 m = row['Mode']; dr = row['dRSI']
-                if not config['use_mode']: m = "Comfort"
+                if not STRATEGY_DB[s_name]['use_mode']: m = "Comfort"
                 
                 # UI에서 설정된 값 사용
                 rs_local = custom_rules.get(m, {'Buy': 0.0, 'Sell': 0.0})
@@ -259,6 +271,8 @@ def run_simulation_logic():
                 if pd.notnull(dr):
                     if dr >= 58: sl = sl_list[0]
                     elif dr <= 40: sl = sl_list[2]
+                
+                # Buy, Sell은 %를 소수로 바꿨으므로 그대로 사용
                 return pd.Series([rs_local.get("Buy", 0.0), rs_local.get("Sell", 0.0), sl])
 
             target[['Buy_Rate', 'Sell_Rate', 'SL_Days']] = target.apply(get_params, axis=1)
@@ -375,8 +389,7 @@ def run_simulation_logic():
             win_rate = (total_trades > 0 and trade_win_cnt / total_trades * 100) or 0.0
             gross_profit = gross_profit if trade_win_cnt > 0 else 0.0; gross_loss = gross_loss if trade_loss_cnt > 0 else 0.0
             profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (99.99 if gross_profit > 0 else 0.0)
-            avg_win = (gross_profit / trade_win_cnt) if trade_win_cnt > 0 else 0.0
-            avg_loss = (gross_loss / trade_loss_cnt) if trade_loss_cnt > 0 else 0.0
+            avg_win = (gross_profit / trade_win_cnt) if trade_win_cnt > 0 else 0.0; avg_loss = (gross_loss / trade_loss_cnt) if trade_loss_cnt > 0 else 0.0
 
             # --- 📊 Streamlit Dashboard (Metric Cards) ---
             k1, k2, k3, k4, k5 = st.columns(5)
