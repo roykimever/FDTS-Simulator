@@ -70,10 +70,6 @@ STRATEGY_DB = {
 }
 STRATEGY_EN_MAP = {'1. 터보 운전법': 'Turbo Driving', '2. 안전 운전법': 'Safety Driving', '3. 풍차 매매법': 'Wind Wheel', '4. 동파법': 'DSS', '5. 떨사오팔': '0458', '6. 종사종팔3': 'Jong Jong'}
 
-# --- 세션 상태 초기화 함수 ---
-if 's_name_key' not in st.session_state:
-    st.session_state.s_name_key = list(STRATEGY_DB.keys())[0]
-
 # ==============================================================================
 # [1] Streamlit UI 구성 및 입력값 처리
 # ==============================================================================
@@ -125,21 +121,15 @@ modes = ['Turbo', 'Sports', 'Comfort', 'Eco']
 params_labels = ['매수율(%)', '익절율(%)', 'SL(상단)', 'SL(중단)', 'SL(하단)']
 param_keys = ['Buy', 'Sell', 'SL_H', 'SL_M', 'SL_L']
 
+custom_rules = {}
+custom_sl_matrix = {}
+custom_weights = {}
+
 # --- 파라미터 매트릭스 입력 UI ---
 with st.container(border=True):
     st.markdown("##### 모드별 매수/익절율 및 손절일 설정 (단위: % / 일)")
     
-    # 튜닝 입력값 저장소 초기화
-    custom_rules = {m: {} for m in modes}
-    custom_sl_matrix = {m: [0, 0, 0] for m in modes}
-
-    # 헤더 생성
-    cols_header = st.columns(len(modes) + 1)
-    cols_header[0].markdown('**파라미터**')
-    for idx, mode in enumerate(modes):
-        cols_header[idx + 1].markdown(f'**{mode}**')
-
-    # 데이터 행 생성 및 입력값 수집
+    # 튜닝 입력값 로드 및 UI 생성
     for r_idx, label in enumerate(params_labels):
         p_key = param_keys[r_idx]
         cols = st.columns(len(modes) + 1)
@@ -157,16 +147,16 @@ with st.container(border=True):
                 step = 1
                 is_int = True
 
-            key_id = f"{s_name}_{mode}_{p_key}"
+            key_id = f"param_{s_name}_{mode}_{p_key}"
             
             # UI 생성
             if is_int:
                 value = cols[c_idx + 1].number_input(' ', value=int(default_val), key=key_id, min_value=0, step=step, label_visibility="collapsed")
                 if 'SL' in p_key:
-                    custom_sl_matrix[mode][sl_idx] = int(value)
+                    custom_sl_matrix.setdefault(mode, [0, 0, 0])[sl_idx] = int(value)
             else:
                 value = cols[c_idx + 1].number_input(' ', value=float(default_val), key=key_id, step=step, label_visibility="collapsed", format="%.1f")
-                custom_rules[mode][p_key] = value * 0.01 # %를 소수로 변환
+                custom_rules.setdefault(mode, {})[p_key] = value * 0.01 # %를 소수로 변환
 
 
 # --- 분할별 비중 설정 UI ---
@@ -174,8 +164,6 @@ st.markdown("##### ⚖️ 분할별 비중 (1회 투입금 배수)")
 cols_weights = st.columns(min(10, split))
 
 # 튜닝 입력값 저장소
-custom_weights = {}
-
 for i in range(1, split + 1):
     default_weight = config['weights'].get(i, 0.0)
     
@@ -183,7 +171,7 @@ for i in range(1, split + 1):
         w = cols_weights[i - 1].number_input(f"{i}차 비중", value=float(default_weight), key=f"weight_{i}", step=0.1, label_visibility="visible")
         custom_weights[i] = w
     else:
-        # 11차 이상은 UI에 표시하지 않고 DB 기본값 (1.0)으로 로직에만 전달
+        # 11차 이상은 DB 기본값 사용 (로직에만 전달)
         custom_weights[i] = default_weight
 
 
@@ -211,8 +199,7 @@ def run_simulation_logic():
     st.markdown("---")
     st.subheader(f"📊 {STRATEGY_EN_MAP.get(s_name, s_name)} 분석 결과")
     
-    # 🌟 UI 입력값 다시 로드 (파라미터 변수)
-    st_name_en = STRATEGY_EN_MAP.get(s_name, s_name)
+    # 🌟 UI 입력값 로드
     seed_input = float(seed)
     split_input = int(split)
     update_cycle = int(cycle)
@@ -227,7 +214,7 @@ def run_simulation_logic():
                 st.error("데이터 로드 실패 또는 종목 코드가 잘못되었습니다.")
                 return
 
-            # --- RSI 및 모드 계산 (로직 동일) ---
+            # --- RSI 및 모드 계산 ---
             q_weekly = qqq['Close'].resample('W-FRI').last().to_frame()
             delta = q_weekly['Close'].diff()
             up = delta.clip(lower=0).rolling(14).mean(); down = (-1 * delta.clip(upper=0)).rolling(14).mean()
@@ -416,7 +403,7 @@ def run_simulation_logic():
             
             ax1.set_ylabel('Asset ($)', fontsize=11, fontweight='bold', color='#e74c3c')
             ax1_twin.set_ylabel('Stock Price ($)', fontsize=11, color='#95a5a6')
-            ax1.set_title(f"🚀 Asset Growth & Price Action ({ticker_input}) - {st_name_en}", fontsize=14, fontweight='bold', pad=10)
+            ax1.set_title(f"🚀 Asset Growth & Price Action ({ticker}) - {STRATEGY_EN_MAP.get(s_name, s_name)}", fontsize=14, fontweight='bold', pad=10)
             
             lines = line1 + line2; labels = [l.get_label() for l in lines]
             ax1.legend(lines, labels, loc='upper left', frameon=True, framealpha=0.9, shadow=True)
