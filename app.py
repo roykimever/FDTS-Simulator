@@ -90,7 +90,6 @@ STRATEGY_EN_MAP = {'1. 터보 운전법': 'Turbo', '2. 안전 운전법': 'Safet
 # ==============================================================================
 # [3] 초기화 및 상태 관리
 # ==============================================================================
-# 🌟 [오류 해결] 변수를 전역에서 먼저 선언하여 NameError 방지
 run_clicked = False 
 
 if 's_name' not in st.session_state:
@@ -183,7 +182,6 @@ with st.sidebar:
             cols_w[(i-1)%2].number_input(f"{i}차", key=key_id, step=0.1)
 
     st.markdown("---")
-    # 🌟 [핵심 수정] 버튼 클릭 시 Session State에 실행 상태 저장
     if st.button("🚀 실행", type="primary", use_container_width=True):
         st.session_state.run_sim = True
 
@@ -202,7 +200,6 @@ def get_data(ticker, start_date, end_date):
     return qqq, target
 
 def run_simulation():
-    # 입력값 로드
     s_name = st.session_state.s_name
     base_config = STRATEGY_DB[s_name]
     ticker = st.session_state.ticker
@@ -231,13 +228,11 @@ def run_simulation():
 
     with st.spinner(f"{ticker} 데이터 분석 중..."):
         try:
-            # 1. 데이터 로드
             qqq, target = get_data(ticker, start_date, end_date)
             if qqq.empty or target.empty:
-                st.error("데이터 로드 실패")
+                st.error("데이터를 불러오지 못했습니다.")
                 return
 
-            # 2. 지표 계산
             q_weekly = qqq['Close'].resample('W-FRI').last().to_frame()
             delta = q_weekly['Close'].diff()
             up = delta.clip(lower=0).rolling(14).mean(); down = (-1 * delta.clip(upper=0)).abs().rolling(14).mean()
@@ -285,7 +280,6 @@ def run_simulation():
             target['Prev_Close'] = target['Close'].shift(1)
             target['Target_Price'] = target['Prev_Close'] * (1 + target['Buy_Rate'])
 
-            # 3. 시뮬레이션 루프
             df = target.loc[start_date:end_date].copy()
             if df.empty: st.error("해당 기간의 데이터가 없습니다."); return
 
@@ -405,7 +399,6 @@ def run_simulation():
             profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (99.99 if gross_profit > 0 else 0.0)
             total_fee = df['Buy_Fee'].sum() + df['Sell_Fee'].sum()
 
-            # Dashboard
             cols = st.columns(6)
             def color_val(val): return "green" if val >= 0 else "red"
             cols[0].metric("Total Return", f"{total_return:+.1f}%")
@@ -415,7 +408,6 @@ def run_simulation():
             cols[4].metric("Win Rate", f"{win_rate:.1f}%")
             cols[5].metric("Total Fee", f"${total_fee:,.0f}")
 
-            # Chart
             fig = plt.figure(figsize=(16, 10)); gs = gridspec.GridSpec(3, 1, height_ratios=[2, 1, 1], hspace=0.3)
             ax1 = plt.subplot(gs[0])
             line1 = ax1.plot(df.index, df['Total_Asset'], label='Asset', color='#e74c3c', linewidth=2)
@@ -436,30 +428,55 @@ def run_simulation():
             
             st.pyplot(fig)
 
-            # Table
             with st.expander("📋 상세 거래 내역 (클릭하여 펼치기)", expanded=False):
-                # 존재하는 컬럼만 선택하여 출력 (KeyError 방지)
-                available_cols = []
-                target_cols = ['Close', 'Change', 'wRSI', 'dRSI', 'Mode', 'Buy_Rate', 'Sell_Rate', 'SL_Days', 'Real_Split', 'Input_Asset', 'Split_Count', 'Split_Weight', '1_Time_Input', 'Update_Amt', 'Target_Price', 'Actual_Buy_Price', 'Buy_Vol', 'Sell_Target_Price', 'TP_Price', 'TP_Date', 'SL_Price', 'SL_Date', 'Status', 'Daily_Sell_Amt', 'Daily_PnL', 'Total_Buy_Amt', 'Total_Eval_Amt', 'Total_Deposit', 'Total_Asset', 'Accum_Return', 'DD', 'Buy_Fee', 'Sell_Fee']
+                # 🌟 [KEY ERROR FIX] 숫자로 변환 가능한 컬럼만 subset 지정
+                # Status는 문자열이므로 subset에서 제외
+                target_cols = ['Close', 'Change', 'wRSI', 'dRSI', 'Buy_Rate', 'Sell_Rate', 'SL_Days',
+                               'Real_Split', 'Input_Asset', 'Split_Count', 'Split_Weight', '1_Time_Input', 'Update_Amt', 
+                               'Target_Price', 'Actual_Buy_Price', 'Buy_Vol', 'Sell_Target_Price', 'TP_Price', 'SL_Price', 
+                               'Status', 'Daily_Sell_Amt', 'Daily_PnL', 'Total_Buy_Amt', 'Total_Eval_Amt', 'Total_Deposit', 'Total_Asset', 'Accum_Return', 'DD', 'Buy_Fee', 'Sell_Fee']
                 
-                for c in target_cols:
-                    if c in df.columns: available_cols.append(c)
+                # 실제 존재하는 컬럼만 선택
+                available_cols = [c for c in target_cols if c in df.columns]
                 
+                # 표시용 데이터프레임 생성
                 df_disp = df[available_cols].copy()
+                
+                # 날짜 포맷팅
                 df_disp.index = df_disp.index.strftime('%Y-%m-%d')
                 
+                # 하이라이트 함수 (글자색 변경)
                 def highlight(s):
-                    if '익절' in str(s.get('Status', '')): return ['background-color: rgba(231, 76, 60, 0.1); color: #c0392b'] * len(s)
-                    if '손절' in str(s.get('Status', '')): return ['background-color: rgba(41, 128, 185, 0.1); color: #2980b9'] * len(s)
-                    return [''] * len(s)
+                    # 전체 행에 대해 기본값(빈 문자열) 리스트 생성
+                    styles = [''] * len(s)
+                    
+                    # Status 컬럼이 있는지 확인하고 조건 검사
+                    if 'Status' in s.index:
+                        status_val = str(s['Status'])
+                        if '익절' in status_val:
+                            return ['color: #e74c3c; font-weight: bold'] * len(s)
+                        if '손절' in status_val:
+                            return ['color: #2980b9; font-weight: bold'] * len(s)
+                        if '매수' in status_val:
+                            return ['color: green; font-weight: bold'] * len(s)
+                    
+                    return styles
 
-                st.dataframe(df_disp.style.apply(highlight, axis=1).format("{:.2f}"), use_container_width=True)
+                # 숫자형 컬럼 찾기 (포맷팅용)
+                numeric_cols = df_disp.select_dtypes(include=['float64', 'int64']).columns
+
+                # 스타일 및 포맷 적용 후 출력
+                st.dataframe(
+                    df_disp.style
+                    .apply(highlight, axis=1)
+                    .format("{:.2f}", subset=numeric_cols), # 숫자 컬럼만 .2f 포맷 적용
+                    use_container_width=True
+                )
 
         except Exception as e:
             st.error(f"❌ 분석 중 오류 발생: {str(e)}")
             import traceback
             st.text(traceback.format_exc())
 
-# 실행 트리거 (Session State 체크)
 if st.session_state.get('run_sim'):
     run_simulation()
