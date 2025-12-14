@@ -4,57 +4,42 @@ import yfinance as yf
 import numpy as np
 import math
 import warnings
+import random
 from datetime import datetime, date, timedelta
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import seaborn as sns
+import io
 
 # ------------------------------------------------------------------------------
-# [설정] 페이지 기본 설정 (반드시 최상단)
+# [1] 페이지 설정
 # ------------------------------------------------------------------------------
-st.set_page_config(
-    page_title="FDTS 시뮬레이터", 
-    page_icon="📈", 
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="FDTS 시뮬레이터", page_icon="📈", layout="wide")
 
-# 스타일 설정
 plt.style.use('seaborn-v0_8-whitegrid')
 plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['axes.unicode_minus'] = False
 warnings.filterwarnings('ignore')
 
-# ------------------------------------------------------------------------------
-# [CSS] 커스텀 스타일 (가독성 향상)
-# ------------------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* 메인 타이틀 여백 조정 */
-    .block-container { padding-top: 2rem; }
-    
-    /* 카드형 메트릭 스타일 */
-    div[data-testid="metric-container"] {
-        background-color: #f8f9fa;
-        border: 1px solid #e9ecef;
-        padding: 10px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    .block-container { padding-top: 1rem; padding-bottom: 5rem; }
+    .stButton>button { width: 100%; font-weight: bold; border-radius: 8px; height: 3em; }
+    .metric-card {
+        background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 8px;
+        padding: 15px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
-    
-    /* 테이블 헤더 스타일 */
-    thead tr th:first-child { display:none }
-    tbody th { display:none }
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# [0] 전략 데이터베이스
+# [2] 전략 데이터베이스
 # ==============================================================================
 STRATEGY_DB = {
     '1. 터보 운전법': {
         'split': 7, 'profit': 85.0, 'loss': 35.0, 'cycle': 9,
         'mode_logic': 'Standard', 'use_mode': True,
+        'active_modes': ['Turbo', 'Sports', 'Comfort', 'Eco'],
         'weights': {1: 0.0, 2: 0.3, 3: 0.5, 4: 0.7, 5: 2.3, 6: 2.2, 7: 1.0},
         'rules': {"Turbo": {"Buy": 2.8, "Sell": 2.6}, "Sports": {"Buy": 4.1, "Sell": 3.2}, "Comfort": {"Buy": 5.3, "Sell": 2.1}, "Eco": {"Buy": 6.6, "Sell": 0.4}},
         'sl_matrix': {"Turbo": [6, 7, 8], "Sports": [7, 8, 10], "Comfort": [16, 18, 20], "Eco": [26, 27, 30]}
@@ -62,6 +47,7 @@ STRATEGY_DB = {
     '2. 안전 운전법': {
         'split': 7, 'profit': 75.0, 'loss': 40.0, 'cycle': 10,
         'mode_logic': 'Standard', 'use_mode': True,
+        'active_modes': ['Turbo', 'Sports', 'Comfort', 'Eco'],
         'weights': {1: 0.0, 2: 0.0, 3: 0.0, 4: 1.1, 5: 2.3, 6: 2.4, 7: 1.3},
         'rules': {"Turbo": {"Buy": 3.5, "Sell": 2.8}, "Sports": {"Buy": 4.5, "Sell": 2.8}, "Comfort": {"Buy": 5.0, "Sell": 2.0}, "Eco": {"Buy": 6.5, "Sell": 0.6}},
         'sl_matrix': {"Turbo": [6, 7, 8], "Sports": [6, 7, 8], "Comfort": [15, 17, 20], "Eco": [25, 28, 30]}
@@ -69,6 +55,7 @@ STRATEGY_DB = {
     '3. 풍차 매매법': {
         'split': 10, 'profit': 90.0, 'loss': 25.0, 'cycle': 5,
         'mode_logic': 'Standard', 'use_mode': True,
+        'active_modes': ['Turbo', 'Sports', 'Comfort', 'Eco'],
         'weights': {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0, 6: 0.5, 7: 3.0, 8: 4.0, 9: 2.0, 10: 0.5},
         'rules': {"Turbo": {"Buy": 3.5, "Sell": 0.1}, "Sports": {"Buy": 4.5, "Sell": 0.1}, "Comfort": {"Buy": 5.0, "Sell": 0.1}, "Eco": {"Buy": 6.5, "Sell": 0.1}},
         'sl_matrix': {"Turbo": [10, 15, 20], "Sports": [12, 17, 22], "Comfort": [15, 20, 25], "Eco": [20, 25, 30]}
@@ -76,6 +63,7 @@ STRATEGY_DB = {
     '4. 동파법': {
         'split': 7, 'profit': 80.0, 'loss': 30.0, 'cycle': 10,
         'mode_logic': 'Dongpa', 'use_mode': True,
+        'active_modes': ['Sports', 'Eco'],
         'weights': {i: 1.0 for i in range(1, 101)},
         'rules': {"Turbo": {"Buy": 0.0, "Sell": 0.0}, "Sports": {"Buy": 5.0, "Sell": 2.5}, "Comfort": {"Buy": 0.0, "Sell": 0.0}, "Eco": {"Buy": 3.0, "Sell": 0.2}},
         'sl_matrix': {"Turbo": [0, 0, 0], "Sports": [7, 7, 7], "Comfort": [0, 0, 0], "Eco": [30, 30, 30]}
@@ -83,6 +71,7 @@ STRATEGY_DB = {
     '5. 떨사오팔': {
         'split': 7, 'profit': 80.0, 'loss': 30.0, 'cycle': 10,
         'mode_logic': 'Single_Eco', 'use_mode': False,
+        'active_modes': ['Eco'],
         'weights': {i: 1.0 for i in range(1, 101)},
         'rules': {"Comfort": {"Buy": -0.1, "Sell": 0.1}, "Eco": {"Buy": -0.1, "Sell": 0.1}},
         'sl_matrix': {"Comfort": [30, 30, 30], "Eco": [30, 30, 30]}
@@ -90,6 +79,7 @@ STRATEGY_DB = {
     '6. 종사종팔3': {
         'split': 7, 'profit': 70.0, 'loss': 0.0, 'cycle': 10,
         'mode_logic': 'Single_Eco', 'use_mode': False,
+        'active_modes': ['Eco'],
         'weights': {i: 1.0 for i in range(1, 101)},
         'rules': {"Turbo": {"Buy": 15.0, "Sell": 2.7}, "Sports": {"Buy": 15.0, "Sell": 2.7}, "Comfort": {"Buy": 15.0, "Sell": 2.7}, "Eco": {"Buy": 15.0, "Sell": 2.7}},
         'sl_matrix': {"Turbo": [10, 10, 10], "Sports": [10, 10, 10], "Comfort": [10, 10, 10], "Eco": [10, 10, 10]}
@@ -97,7 +87,12 @@ STRATEGY_DB = {
 }
 STRATEGY_EN_MAP = {'1. 터보 운전법': 'Turbo', '2. 안전 운전법': 'Safety', '3. 풍차 매매법': 'WindWheel', '4. 동파법': 'DSS', '5. 떨사오팔': '0458', '6. 종사종팔3': 'Jong3'}
 
-# --- 세션 초기화 ---
+# ==============================================================================
+# [3] 초기화 및 상태 관리
+# ==============================================================================
+# 🌟 [오류 해결] 변수를 전역에서 먼저 선언하여 NameError 방지
+run_clicked = False 
+
 if 's_name' not in st.session_state:
     st.session_state.s_name = list(STRATEGY_DB.keys())[0]
 
@@ -115,6 +110,7 @@ def update_defaults():
         st.session_state[f"param_{mode}_Buy_Rate"] = float(mode_rules.get('Buy', 0.0))
         st.session_state[f"param_{mode}_Sell_Rate"] = float(mode_rules.get('Sell', 0.0))
         sl_list = config['sl_matrix'].get(mode, [0, 0, 0])
+        sl_list = sl_list if len(sl_list) >= 3 else [0, 0, 0]
         st.session_state[f"param_{mode}_SL_High"] = int(sl_list[0])
         st.session_state[f"param_{mode}_SL_Mid"] = int(sl_list[1])
         st.session_state[f"param_{mode}_SL_Low"] = int(sl_list[2])
@@ -122,7 +118,6 @@ def update_defaults():
     for i in range(1, 11):
         st.session_state[f"weight_{i}"] = float(config['weights'].get(i, 0.0))
 
-# 초기값 설정
 if 'split' not in st.session_state:
     st.session_state.ticker = "SOXL"
     st.session_state.method = '정수매수 (분모=목표가)'
@@ -133,46 +128,42 @@ if 'split' not in st.session_state:
     update_defaults()
 
 # ==============================================================================
-# [1] 사이드바 (설정 패널)
+# [4] 사이드바 설정 패널
 # ==============================================================================
 with st.sidebar:
     st.title("🎛️ FDTS 설정")
-    
-    # 1. 기본 설정
     st.selectbox("📌 매매전략", list(STRATEGY_DB.keys()), key='s_name', on_change=update_defaults)
     
-    c1, c2 = st.columns(2)
-    c1.text_input("📈 종목코드", key='ticker')
-    c2.selectbox("⚖️ 매수방식", ['정액매수 (분모=종가)', '정수매수 (분모=목표가)'], key='method')
+    col1, col2 = st.columns(2)
+    col1.text_input("📈 종목", key='ticker')
+    col2.selectbox("⚖️ 방식", ['정액매수 (분모=종가)', '정수매수 (분모=목표가)'], key='method')
     
-    c3, c4 = st.columns(2)
-    c3.number_input("💰 자본($)", step=1000, key='seed')
-    c4.number_input("🔢 분할수", min_value=1, step=1, key='split')
+    col3, col4 = st.columns(2)
+    col3.number_input("💰 자본($)", step=1000, key='seed')
+    col4.number_input("🔢 분할수", min_value=1, step=1, key='split')
     
-    c5, c6 = st.columns(2)
-    c5.number_input("🔄 주기(일)", min_value=1, key='cycle')
-    c6.number_input("💸 수수료(%)", step=0.001, format="%.3f", key='commission')
+    col5, col6 = st.columns(2)
+    col5.number_input("🔄 주기(일)", min_value=1, key='cycle')
+    col6.number_input("💸 수수료(%)", step=0.001, format="%.3f", key='commission')
     
-    c7, c8 = st.columns(2)
-    c7.number_input("🔺 이익(%)", step=0.1, key='p_rate')
-    c8.number_input("🔻 손실(%)", step=0.1, key='l_rate')
+    col7, col8 = st.columns(2)
+    col7.number_input("🔺 이익(%)", step=0.1, key='p_rate')
+    col8.number_input("🔻 손실(%)", step=0.1, key='l_rate')
     
     st.markdown("---")
     st.caption("📅 시뮬레이션 기간")
-    d1, d2 = st.columns(2)
-    d1.date_input("시작", key='start_d')
-    d2.date_input("종료", key='end_d')
+    c_start, c_end = st.columns(2)
+    c_start.date_input("시작", key='start_d')
+    c_end.date_input("종료", key='end_d')
     
-    # 2. 파라미터 튜닝
+    st.markdown("---")
     with st.expander("⚙️ 고급 파라미터 튜닝", expanded=False):
         modes = ['Turbo', 'Sports', 'Comfort', 'Eco']
         params_labels = ['매수율', '익절율', 'SL(상)', 'SL(중)', 'SL(하)']
         param_keys = ['Buy_Rate', 'Sell_Rate', 'SL_High', 'SL_Mid', 'SL_Low']
-        
         cols = st.columns([1.5, 1, 1, 1, 1])
         cols[0].markdown("**항목**")
         for i, m in enumerate(modes): cols[i+1].markdown(f"**{m[0]}**")
-        
         for r_idx, label in enumerate(params_labels):
             p_key = param_keys[r_idx]
             cols = st.columns([1.5, 1, 1, 1, 1])
@@ -185,7 +176,6 @@ with st.sidebar:
                     else:
                         st.number_input("Rate", key=key_id, step=0.1, format="%.1f", label_visibility="collapsed")
     
-    # 3. 비중 설정
     with st.expander("⚖️ 분할별 비중 설정", expanded=False):
         cols_w = st.columns(2)
         for i in range(1, 11):
@@ -193,10 +183,12 @@ with st.sidebar:
             cols_w[(i-1)%2].number_input(f"{i}차", key=key_id, step=0.1)
 
     st.markdown("---")
-    btn_run = st.button("🚀 시뮬레이션 실행", type="primary", use_container_width=True)
+    # 🌟 [핵심 수정] 버튼 클릭 시 Session State에 실행 상태 저장
+    if st.button("🚀 실행", type="primary", use_container_width=True):
+        st.session_state.run_sim = True
 
 # ==============================================================================
-# [2] 메인 로직
+# [5] 메인 로직
 # ==============================================================================
 st.title("📊 FDTS Trading Simulator")
 
@@ -210,7 +202,7 @@ def get_data(ticker, start_date, end_date):
     return qqq, target
 
 def run_simulation():
-    # 입력값 가져오기
+    # 입력값 로드
     s_name = st.session_state.s_name
     base_config = STRATEGY_DB[s_name]
     ticker = st.session_state.ticker
@@ -224,9 +216,7 @@ def run_simulation():
     commission = float(st.session_state.commission)
     cycle = int(st.session_state.cycle)
 
-    # 커스텀 룰 생성
-    custom_rules = {}
-    custom_sl_matrix = {}
+    custom_rules = {}; custom_sl_matrix = {}
     modes = ['Turbo', 'Sports', 'Comfort', 'Eco']
     for m in modes:
         b = float(st.session_state[f"param_{m}_Buy_Rate"]) * 0.01
@@ -236,7 +226,7 @@ def run_simulation():
         md = int(st.session_state[f"param_{m}_SL_Mid"])
         l = int(st.session_state[f"param_{m}_SL_Low"])
         custom_sl_matrix[m] = [h, md, l]
-
+    
     custom_weights = {i: (float(st.session_state[f"weight_{i}"]) if i <= split else 0.0) for i in range(1, 11)}
 
     with st.spinner(f"{ticker} 데이터 분석 중..."):
@@ -244,59 +234,48 @@ def run_simulation():
             # 1. 데이터 로드
             qqq, target = get_data(ticker, start_date, end_date)
             if qqq.empty or target.empty:
-                st.error("데이터를 불러오지 못했습니다.")
+                st.error("데이터 로드 실패")
                 return
 
             # 2. 지표 계산
             q_weekly = qqq['Close'].resample('W-FRI').last().to_frame()
             delta = q_weekly['Close'].diff()
-            up = delta.clip(lower=0).rolling(14).mean()
-            down = (-1 * delta.clip(upper=0)).abs().rolling(14).mean()
-            rs = up / down.replace(0, np.nan)
-            q_weekly['wRSI'] = 100 - (100 / (1 + rs))
-            q_weekly['RSI_1'] = q_weekly['wRSI'].shift(1)
-            q_weekly['RSI_2'] = q_weekly['wRSI'].shift(2)
+            up = delta.clip(lower=0).rolling(14).mean(); down = (-1 * delta.clip(upper=0)).abs().rolling(14).mean()
+            rs = up / down.replace(0, np.nan); q_weekly['wRSI'] = 100 - (100 / (1 + rs))
+            q_weekly['RSI_1'] = q_weekly['wRSI'].shift(1); q_weekly['RSI_2'] = q_weekly['wRSI'].shift(2)
 
             modes_std = []; modes_dp = []; p_std = "Comfort"; p_dp = "Eco"
             for _, row in q_weekly.iterrows():
-                r1, r2 = row['RSI_1'], row['RSI_2']
-                m_std = p_std
+                r1, r2 = row['RSI_1'], row['RSI_2']; m_std = p_std
                 if not (pd.isna(r1) or pd.isna(r2)):
                     if (r2 < 40) and ((r1 - r2) >= 5) and (r1 <= 55): m_std = "Turbo"
                     elif ((r2 > 65 and r1 < r2) or (40 < r2 < 50 and r1 < r2) or (r1 < 50 and r2 > 50)): m_std = "Eco"
                     elif ((r2 < 35 and r1 > r2) or (50 < r2 < 60 and r1 > r2) or (r1 > 50 and r2 < 50)): m_std = "Sports"
                     elif (40 <= r2 <= 65): m_std = "Comfort"
                 modes_std.append(m_std); p_std = m_std
-
                 m_dp = p_dp
                 if not (pd.isna(r1) or pd.isna(r2)):
                     if (r2 >= 65 and r1 < r2) or (40 <= r2 <= 50 and r1 < r2) or (r2 >= 50 and r1 < 50): m_dp = "Eco"
                     elif (r2 <= 50 and r1 > 50) or (50 <= r2 <= 60 and r1 > r2) or (r2 <= 35 and r1 > r2): m_dp = "Sports"
                 modes_dp.append(m_dp); p_dp = m_dp
             
-            q_weekly['Mode_Std'] = modes_std
-            q_weekly['Mode_Dongpa'] = modes_dp
+            q_weekly['Mode_Std'] = modes_std; q_weekly['Mode_Dongpa'] = modes_dp
 
-            # 타겟 데이터 병합
             target['Change'] = target['Close'].pct_change() * 100
             d_delta = target['Close'].diff()
-            up2 = d_delta.clip(lower=0).rolling(14).mean()
-            down2 = (-1 * d_delta.clip(upper=0)).abs().rolling(14).mean()
-            rs2 = up2 / down2.replace(0, np.nan)
-            target['dRSI'] = 100 - (100 / (1 + rs2))
+            up2 = d_delta.clip(lower=0).rolling(14).mean(); down2 = (-1 * d_delta.clip(upper=0)).abs().rolling(14).mean()
+            rs2 = up2 / down2.replace(0, np.nan); target['dRSI'] = 100 - (100 / (1 + rs2))
 
             target['wRSI'] = q_weekly['wRSI'].reindex(target.index, method='bfill')
             target['Mode_Std'] = q_weekly['Mode_Std'].reindex(target.index, method='bfill').fillna("Comfort")
             target['Mode_Dongpa'] = q_weekly['Mode_Dongpa'].reindex(target.index, method='bfill').fillna("Eco")
             target['Mode'] = target['Mode_Dongpa'] if base_config['mode_logic'] == 'Dongpa' else target['Mode_Std']
 
-            # 파라미터 적용
             def get_params(row):
                 m = row['Mode']; dr = row['dRSI']
                 if not base_config['use_mode']: m = "Comfort"
                 rs_local = custom_rules.get(m, custom_rules.get("Comfort"))
-                sl_list = custom_sl_matrix.get(m, [15, 17, 20])
-                sl = sl_list[1]
+                sl_list = custom_sl_matrix.get(m, [15, 17, 20]); sl = sl_list[1]
                 if pd.notnull(dr):
                     if dr >= 58: sl = sl_list[0]
                     elif dr <= 40: sl = sl_list[2]
@@ -308,11 +287,8 @@ def run_simulation():
 
             # 3. 시뮬레이션 루프
             df = target.loc[start_date:end_date].copy()
-            if df.empty:
-                st.error("해당 기간의 데이터가 없습니다.")
-                return
+            if df.empty: st.error("해당 기간의 데이터가 없습니다."); return
 
-            # 초기화
             df['Split_Count'] = split; df['Real_Split'] = 0; df['Split_Weight'] = 0.0; df['1_Time_Input'] = 0.0
             df['Input_Asset'] = float(seed); df['Update_Amt'] = 0.0
             df['Is_Buy'] = False; df['Actual_Buy_Price'] = 0.0; df['Buy_Vol'] = 0
@@ -321,10 +297,7 @@ def run_simulation():
             df['Daily_PnL'] = 0.0; df['Daily_Sell_Amt'] = 0.0; df['Total_Buy_Amt'] = 0.0
             df['Total_Eval_Amt'] = 0.0; df['Total_Deposit'] = 0.0; df['Total_Asset'] = 0.0
             df['Buy_Fee'] = 0.0; df['Sell_Fee'] = 0.0
-            
-            # [KEY ERROR FIX] Accum_Return 미리 초기화
-            df['Accum_Return'] = 0.0
-            df['DD'] = 0.0
+            df['Accum_Return'] = 0.0; df['DD'] = 0.0
 
             current_real_cash = float(seed); current_input_asset = float(seed); period_net_accum = 0.0
             days_counter = 0; portfolio = []; current_split = 0
@@ -333,7 +306,6 @@ def run_simulation():
             def fmt_date(d): return d.strftime("%y/%m/%d").replace("/0", "/")
 
             for i in range(len(df)):
-                # ... (이전과 동일한 로직) ...
                 days_counter += 1; update_amount = 0.0
                 if days_counter > cycle:
                     update_amount = period_net_accum * profit_rate if period_net_accum > 0 else period_net_accum * loss_rate
@@ -352,8 +324,7 @@ def run_simulation():
                 one_time_input = 0.0 if current_real_cash < 0 else min(one_time_input, current_real_cash)
                 df.iloc[i, df.columns.get_loc('1_Time_Input')] = one_time_input
 
-                daily_status = []; new_portfolio = []
-                daily_pnl_accum = 0.0; daily_sell_accum = 0.0; sell_occurred_today = 0
+                daily_status = []; new_portfolio = []; daily_pnl_accum = 0.0; daily_sell_accum = 0.0; sell_occurred_today = 0
                 daily_buy_fee = 0.0; daily_sell_fee = 0.0
 
                 for item in portfolio:
@@ -413,17 +384,12 @@ def run_simulation():
                 total_eval_amt = sum([item['qty'] * curr_close for item in portfolio])
                 total_asset = current_real_cash + total_eval_amt
                 df.iloc[i, df.columns.get_loc('Status')] = ",".join(daily_status)
-                df.iloc[i, df.columns.get_loc('Daily_Sell_Amt')] = daily_sell_accum
-                df.iloc[i, df.columns.get_loc('Daily_PnL')] = daily_pnl_accum
-                df.iloc[i, df.columns.get_loc('Total_Buy_Amt')] = total_buy_amt
-                df.iloc[i, df.columns.get_loc('Total_Eval_Amt')] = total_eval_amt
-                df.iloc[i, df.columns.get_loc('Total_Deposit')] = current_real_cash
-                df.iloc[i, df.columns.get_loc('Total_Asset')] = total_asset
+                df.iloc[i, df.columns.get_loc('Daily_Sell_Amt')] = daily_sell_accum; df.iloc[i, df.columns.get_loc('Daily_PnL')] = daily_pnl_accum
+                df.iloc[i, df.columns.get_loc('Total_Buy_Amt')] = total_buy_amt; df.iloc[i, df.columns.get_loc('Total_Eval_Amt')] = total_eval_amt
+                df.iloc[i, df.columns.get_loc('Total_Deposit')] = current_real_cash; df.iloc[i, df.columns.get_loc('Total_Asset')] = total_asset
                 df.iloc[i, df.columns.get_loc('Real_Split')] = current_split
-                df.iloc[i, df.columns.get_loc('Buy_Fee')] = daily_buy_fee
-                df.iloc[i, df.columns.get_loc('Sell_Fee')] = daily_sell_fee
+                df.iloc[i, df.columns.get_loc('Buy_Fee')] = daily_buy_fee; df.iloc[i, df.columns.get_loc('Sell_Fee')] = daily_sell_fee
 
-            # [FIX] 결과 컬럼 계산 (모든 루프 종료 후)
             df['Accum_Return'] = (df['Total_Asset'] - float(seed)) / float(seed) * 100
             df['Peak_Asset'] = df['Total_Asset'].cummax()
             df['DD'] = (df['Total_Asset'] - df['Peak_Asset']) / df['Peak_Asset'] * 100
@@ -439,7 +405,7 @@ def run_simulation():
             profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (99.99 if gross_profit > 0 else 0.0)
             total_fee = df['Buy_Fee'].sum() + df['Sell_Fee'].sum()
 
-            # --- 📊 Dashboard ---
+            # Dashboard
             cols = st.columns(6)
             def color_val(val): return "green" if val >= 0 else "red"
             cols[0].metric("Total Return", f"{total_return:+.1f}%")
@@ -449,7 +415,7 @@ def run_simulation():
             cols[4].metric("Win Rate", f"{win_rate:.1f}%")
             cols[5].metric("Total Fee", f"${total_fee:,.0f}")
 
-            # --- 🖼️ Chart ---
+            # Chart
             fig = plt.figure(figsize=(16, 10)); gs = gridspec.GridSpec(3, 1, height_ratios=[2, 1, 1], hspace=0.3)
             ax1 = plt.subplot(gs[0])
             line1 = ax1.plot(df.index, df['Total_Asset'], label='Asset', color='#e74c3c', linewidth=2)
@@ -470,33 +436,21 @@ def run_simulation():
             
             st.pyplot(fig)
 
-            # --- 📄 Table ---
+            # Table
             with st.expander("📋 상세 거래 내역 (클릭하여 펼치기)", expanded=False):
-                # 🌟 [KEY ERROR FIX] 컬럼 존재 여부 확인 후 복사
-                cols = ['Close', 'Change', 'wRSI', 'dRSI', 'Mode', 'Buy_Rate', 'Sell_Rate', 'SL_Days',
-                        'Real_Split', 'Input_Asset', 'Split_Count', 'Split_Weight', '1_Time_Input', 'Update_Amt', 
-                        'Target_Price', 'Actual_Buy_Price', 'Buy_Vol', 'Sell_Target_Price', 'TP_Price', 'TP_Date', 'SL_Price', 'SL_Date', 
-                        'Status', 'Daily_Sell_Amt', 'Daily_PnL', 'Total_Buy_Amt', 'Total_Eval_Amt', 'Total_Deposit', 'Total_Asset', 'Accum_Return', 'DD', 'Buy_Fee', 'Sell_Fee']
+                # 존재하는 컬럼만 선택하여 출력 (KeyError 방지)
+                available_cols = []
+                target_cols = ['Close', 'Change', 'wRSI', 'dRSI', 'Mode', 'Buy_Rate', 'Sell_Rate', 'SL_Days', 'Real_Split', 'Input_Asset', 'Split_Count', 'Split_Weight', '1_Time_Input', 'Update_Amt', 'Target_Price', 'Actual_Buy_Price', 'Buy_Vol', 'Sell_Target_Price', 'TP_Price', 'TP_Date', 'SL_Price', 'SL_Date', 'Status', 'Daily_Sell_Amt', 'Daily_PnL', 'Total_Buy_Amt', 'Total_Eval_Amt', 'Total_Deposit', 'Total_Asset', 'Accum_Return', 'DD', 'Buy_Fee', 'Sell_Fee']
                 
-                # 없는 컬럼은 제외하고 선택
-                available_cols = [c for c in cols if c in df.columns]
+                for c in target_cols:
+                    if c in df.columns: available_cols.append(c)
+                
                 df_disp = df[available_cols].copy()
-                
-                # 컬럼명 한글 변환
-                col_map = {
-                    'Close': '종가', 'Change': '등락(%)', 'Mode': '모드', 'Buy_Rate': '매수율', 'Sell_Rate': '익절율', 'SL_Days': '손절(일)',
-                    'Real_Split': '분할', 'Input_Asset': '투입자산', 'Split_Count': '설정분할', 'Split_Weight': '비중', '1_Time_Input': '1회투입',
-                    'Update_Amt': '갱신금', 'Target_Price': '매수목표', 'Actual_Buy_Price': '실매수', 'Buy_Vol': '매수량',
-                    'Sell_Target_Price': '매도목표', 'TP_Price': '익절가', 'TP_Date': '익절일', 'SL_Price': '손절가', 'SL_Date': '손절일',
-                    'Status': '상태', 'Daily_Sell_Amt': '매도액', 'Daily_PnL': '손익', 'Total_Buy_Amt': '매수총액',
-                    'Total_Eval_Amt': '평가총액', 'Total_Deposit': '예수금', 'Total_Asset': '자산', 'Accum_Return': '수익률', 'DD': 'DD', 'Buy_Fee': '매수수수료', 'Sell_Fee': '매도수수료'
-                }
-                df_disp.rename(columns=col_map, inplace=True)
                 df_disp.index = df_disp.index.strftime('%Y-%m-%d')
                 
                 def highlight(s):
-                    if '익절' in str(s.get('상태', '')): return ['background-color: rgba(231, 76, 60, 0.1); color: #c0392b'] * len(s)
-                    if '손절' in str(s.get('상태', '')): return ['background-color: rgba(41, 128, 185, 0.1); color: #2980b9'] * len(s)
+                    if '익절' in str(s.get('Status', '')): return ['background-color: rgba(231, 76, 60, 0.1); color: #c0392b'] * len(s)
+                    if '손절' in str(s.get('Status', '')): return ['background-color: rgba(41, 128, 185, 0.1); color: #2980b9'] * len(s)
                     return [''] * len(s)
 
                 st.dataframe(df_disp.style.apply(highlight, axis=1).format("{:.2f}"), use_container_width=True)
@@ -506,5 +460,6 @@ def run_simulation():
             import traceback
             st.text(traceback.format_exc())
 
-if run_clicked:
+# 실행 트리거 (Session State 체크)
+if st.session_state.get('run_sim'):
     run_simulation()
